@@ -1,0 +1,4 @@
+*.nc
+README_rp
+__pycache__
+*.grd
