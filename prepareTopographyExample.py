@@ -42,18 +42,23 @@ def readDEM(ncFile, numLat, numLon):
     return grid
 
 def topCalc(inGrid, numLat, numLon, saveFig=False,
-    toPlot=False, nBlocks=100, add_aux=False, nZen=19):
+    toPlot=False, nBlocks=100, add_aux=False, nZen=19, nHz=16):
     '''
     Topology parameter calculation and netcdf generation
 
     Call
-        topCalc(inGrid, numLat, numLon, saveFig=False,
+        nxGridX, nxGridY = topCalc(inGrid, numLat, numLon, saveFig=False,
             toPlot=False, nBlocks=100, add_aux=False, nZen=19)
 
     Inputs
         inGrid -- NumPy array, grid from readDEM()
         numLat -- int, number of grid latitudes
         numLon -- int, number of grid longitudes
+
+    Outputs
+        nxGridX, nxGridY -- integer sets (list with unique elements),
+            this is necessary for naming convention used and
+            referenced throughout module; nxGridY is in descending order
 
     Keywords
         toPlot -- boolean, plot the topology (height, V) maps
@@ -62,6 +67,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
         add_aux -- boolean, control information added to netCDF file
         nZen -- int, number of zenith angle that will be used in
             table preparations
+        nHz -- int, number of horizons
     '''
 
     dLat = 180.0 / numLat
@@ -142,12 +148,15 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
         plt.figure(1)
         top.show(isStatic=False)
 
+    nxGridY, nxGridX = [], []
     for ix, cx1 in enumerate(gB.gridX.gridX[:-1]):
         cx2 = gB.gridX.gridX[ix+1]
         N1, N2 = gB.gridX.NX[ix:ix + 2]
+        nxGridX.append(N1)
         for iy, cy1 in enumerate(gB.gridY.gridX[:-1]):
             cy2 = gB.gridY.gridX[iy+1]
             M2, M1 = gB.gridY.NX[iy:iy + 2]
+            nxGridY.append(M1)
 
             # RP: these variables have to be more descriptive
             ncFile = 'horizon_%05d_%05d.nc' % (N1, M1)
@@ -187,8 +196,8 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
                 dx, dy, N1, N2, M1, M2, top,
                 topography.gridCell(x1=cx1, x2=cx2, y1=cy1, y2=cy2))
 
-            oxAv = numpy.zeros((nZen, topography.NHORIZON))
-            oxAvMask = numpy.zeros((nZen, topography.NHORIZON))
+            oxAv = numpy.zeros((nZen, nHz))
+            oxAvMask = numpy.zeros((nZen, nHz))
             solzen = numpy.deg2rad(numpy.arange(nZen) * 5.)
             for ja, sunA in enumerate(topography.horAngle):
                 curHor = horz[:, :, ja]
@@ -364,7 +373,10 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
 
             print("writing to netcdf DONE")
 
-def prepareSW(outNC='rrtmgp-sw-topography-sample.nc', nCol=90, \
+    return sorted(set(nxGridX)), sorted(set(nxGridY))[::-1]
+
+def prepareSW(nxGridX, nxGridY,
+    outNC='rrtmgp-sw-topography-sample.nc', nCol=90,
     ncFormat='NETCDF4_CLASSIC'):
     '''
     Generate a netCDF file with minimal info required to include
@@ -373,6 +385,10 @@ def prepareSW(outNC='rrtmgp-sw-topography-sample.nc', nCol=90, \
     Call
         prepareSW(outNC='rrtmgp-sw-topography-sample.nc', nCol=90, \
             ncFormat='NETCDF4_CLASSIC')
+
+    Input
+        nxGridX, nxGridY -- int, number of x points in two grids as
+            determined in topCalc()
 
     Keywords
         outNC -- string, path of netCDF to which RT info is written
@@ -386,17 +402,13 @@ def prepareSW(outNC='rrtmgp-sw-topography-sample.nc', nCol=90, \
         zenData = fid.variables['zen'][:]
         horAngle = fid.variables['azm'][:]
 
-    NHORIZON = len(horAngle)
-    NZEN =  len(zenData)
-    oxAvMask = numpy.zeros(((nCol, NHORIZON, NZEN)))
+    nHorizon = len(horAngle)
+    nZen =  len(zenData)
+    oxAvMask = numpy.zeros(((nCol, nHorizon, nZen)))
     id = 0
-    # RP: Robert doesn't like magic numbers. 9 and 10 should be
-    # passed in from topCalc and main()
-    for jj in range(9):
-        for kk in range(10):
-            # RP: we're using an ad-hoc or a priori naming convention
-            fname = 'horizon_%05d_%05d.nc' % \
-                (100 + jj * 60, 641 - kk * 60)
+    for nxx in nxGridX:
+        for nxy in nxGridY:
+            fname = 'horizon_{:05d}_{:05d}.nc'.format(nxx, nxy)
             oxAvMask[id] = numpy.transpose(
                 Dataset(fname).variables['oxAvMask'][:])
             id += 1
@@ -404,8 +416,8 @@ def prepareSW(outNC='rrtmgp-sw-topography-sample.nc', nCol=90, \
     with Dataset(outNC, 'w', format=ncFormat) as oid:
         oid.description = 'Sample dataset created to illustrate ' + \
             'topography effect on SW radiation'
-        oid.createDimension('zen', NZEN)
-        oid.createDimension('azm', NHORIZON)
+        oid.createDimension('zen', nZen)
+        oid.createDimension('azm', nHorizon)
         oid.createDimension('col', nCol)
 
         tVar = oid.createVariable(
@@ -425,7 +437,8 @@ def prepareSW(outNC='rrtmgp-sw-topography-sample.nc', nCol=90, \
         tVar.units = 'deg'
         tVar[:] = zenData
 
-def prepareLW(outNC='rrtmgp-lw-topography-sample.nc', nCol=90, \
+def prepareLW(nxGridX, nxGridY,
+    outNC='rrtmgp-lw-topography-sample.nc', nCol=90,
     ncFormat='NETCDF4_CLASSIC'):
     '''
     Generate a netCDF file with minimal info required to include
@@ -434,6 +447,10 @@ def prepareLW(outNC='rrtmgp-lw-topography-sample.nc', nCol=90, \
     Call
         prepareSW(outNC='rrtmgp-lw-topography-sample.nc', nCol=90, \
             ncFormat='NETCDF4_CLASSIC')
+
+    Input
+        nxGridX, nxGridY -- int, number of x points in two grids as
+            determined in topCalc()
 
     Keywords
         outNC -- string, path of netCDF to which RT info is written
@@ -447,13 +464,9 @@ def prepareLW(outNC='rrtmgp-lw-topography-sample.nc', nCol=90, \
     InvCosA = numpy.zeros(nCol)
 
     id = 0
-    # RP: Robert doesn't like magic numbers. 9 and 10 should be
-    # passed in from topCalc and main()
-    for jj in range(9):
-        for kk in range(10):
-            # RP: we're using an ad-hoc or a priori naming convention
-            fname = 'horizon_%05d_%05d.nc' % \
-                (100 + jj * 60, 641 - kk * 60)
+    for nxx in nxGridX:
+        for nxy in nxGridY:
+            fname = 'horizon_{:05d}_{:05d}.nc'.format(nxx, nxy)
             with Dataset(fname) as tid:
                 V[id] = tid.variables['V'][:]
                 Vav[id] = tid.variables['Vav'][:]
@@ -505,6 +518,15 @@ if __name__ == "__main__":
         help='Generate V and altitude plots in addition to ' + \
         'the output netCDF files and either save (--savefig) or ' + \
         'display them.')
+    parser.add_argument('--n_zenith', '-nz', default=19, type=int, \
+        help='Number of zenith angles')
+    parser.add_argument('--n_horizons', '-nh', default=16, type=int, \
+        help='Number of horizons.')
+    parser.add_argument('--n_blocks', '-nb', default=100, \
+        help='Number of blocks in calculation into which the ' + \
+        'topography grid is partitioned.')
+    parser.add_argument('--auxiliary', '-a', action='store_true', \
+        help='Add auxiliary information into netCDF.')
     args = parser.parse_args()
 
     nLat = args.n_lat
@@ -512,7 +534,9 @@ if __name__ == "__main__":
     inFile = args.infile
 
     demGrid = readDEM(inFile, nLat, nLon)
-    topCalc(demGrid, nLat, nLon,
-        saveFig=args.savefig, toPlot=args.plot)
-    prepareSW()
-    prepareLW()
+    nxx, nxy = topCalc(demGrid, nLat, nLon,
+        saveFig=args.savefig, toPlot=args.plot,
+        nBlocks=args.n_blocks, add_aux=args.auxiliary,
+        nZen=args.n_zenith, nHz=args.n_horizons)
+    prepareSW(nxx, nxy)
+    prepareLW(nxx, nxy)
