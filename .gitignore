@@ -1,3 +1,6 @@
 *.nc
 *.pkl
 *.png
+README_rp
+__pycache__
+*.grd
