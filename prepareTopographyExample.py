@@ -200,10 +200,10 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
                     mask = numpy.int32(curHor > sunZ)
                     oxAv[kk, ja] = numpy.mean(
                         weight * (1. + tanA * numpy.tan(sunZ) *
-                        numpy.cos(sunA - S)))
+                        numpy.cos(sunA - S)))/numpy.mean(weight)
                     oxAvMask[kk, ja] = numpy.mean(mask *
                         weight * (1. + tanA * numpy.tan(sunZ) *
-                        numpy.cos(sunA - S)))
+                        numpy.cos(sunA - S)))/numpy.mean(weight)
 
             # sky view factor
             V = numpy.zeros_like(weight)
@@ -299,14 +299,13 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
                 tVar.standard_name = 'LW view factor'
                 tVar.long_name = 'LW view factor'
                 tVar.units = 'none'
-
-                tVar[:] = numpy.mean(V)
+                tVar[:] = numpy.mean(weight*V)/numpy.mean(weight)
 
                 tVar = fid.createVariable('Vav', 'f4')
                 tVar.standard_name = 'weighted LW view factor'
                 tVar.long_name = 'weighted LW view factor'
                 tVar.units = 'none'
-                tVar[:] = numpy.mean(V * numpy.sqrt(1. + tanA ** 2))
+                tVar[:] = numpy.mean(weight*V * numpy.sqrt(1. + tanA ** 2))/numpy.mean(weight)
 
                 tVar = fid.createVariable('InvCosA', 'f4')
                 tVar.standard_name = \
@@ -314,7 +313,7 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
                 tVar.long_name = \
                     'averaged inverse cosine of slope angle'
                 tVar.units = 'unit'
-                tVar[:] = numpy.mean(numpy.sqrt(1. + tanA ** 2))
+                tVar[:] = numpy.mean(weight*numpy.sqrt(1. + tanA ** 2))/numpy.mean(weight)
 
             if toPlot:
                 plt.figure(2)
@@ -557,9 +556,5 @@ if __name__ == "__main__":
         nBlocks=args.n_blocks, add_aux=args.auxiliary,
         nZen=args.n_zenith, nHz=args.n_horizons)
 
-    # nxx, nxy = topCalc(demGrid, nLat, nLon,
-    #     saveFig=args.savefig, toPlot=args.plot,
-    #     nBlocks=args.n_blocks, add_aux=args.auxiliary,
-    #     nZen=args.n_zenith, nHz=args.n_horizons)
     prepareSW(nxx, nxy)
     prepareLW(nxx, nxy)
