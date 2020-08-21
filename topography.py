@@ -75,16 +75,15 @@ class grid1D():
 
     def createGrid(self):
         """
+        creates uniform grid
         """
-
         self.gridX = numpy.linspace(
-            self.x1, self.x2, (self.x2 - self.x1) // self.dX + 1)
+            self.x1, self.x2, num=int((self.x2 - self.x1) // self.dX + 1))
         self.idx = 0
 
     def findStart(self, start, delta):
         """
         """
-
         if start < self.gridX[0]:
             self.NX = numpy.int32((self.gridX - start) / delta)
         else:
@@ -145,6 +144,7 @@ class gridBlock(gridCell):
             pkl.dump(self.gridY.x2, fid)
 
     def createGrid(self):
+        print ('creating gridX.createGrid')
         self.gridX.createGrid()
         self.gridY.createGrid()
 
@@ -202,13 +202,12 @@ class topographyBlock():
                 plt.savefig(figFileName)
             plt.show()
 
-def preProcInit(dx, dy, dLon, dLat, maxDist=20000, nHz=16):
+def preProcInit(dx, dy, dLon, dLat, horAngle, maxDist=20000):
     """
     maxDist -- float, maximum distance in meters
+    horAngle -- azimuthal angle at which the horizon angle computed
     nHz -- int, number of horizons
     """
-
-    horAngle = calcHorizontalAngle(nHz)
 
     for an, angle in enumerate(horAngle):
         maxY = - int(maxDist * numpy.sin(angle) / dy)
@@ -237,12 +236,11 @@ def preProcInit(dx, dy, dLon, dLat, maxDist=20000, nHz=16):
             IDXYY[an] = numpy.int32(numpy.floor(ty))
             IDXYX[an] = ix
 
-def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, usepkl=False,
-    nHz=16):
+def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, horAngle, usepkl=False):
     """
-    nHz -- int, number of horizons
+    horAngle -- azimuthal angle at which the horizon angle computed
     """
-
+    nHz = len(horAngle)
     pklFile = 'horizon_%05d_%05d.pkl'%(N1,M1)
     if usepkl and os.path.isfile(pklFile):
         with open(pklFile, 'rb') as fid:

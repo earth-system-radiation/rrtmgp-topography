@@ -6,6 +6,9 @@ numpy.set_printoptions(linewidth=200)
 import matplotlib.colors as colors
 from netCDF4 import Dataset
 
+import warnings
+warnings.filterwarnings("ignore")
+dbg=False
 class MidpointNormalize(colors.Normalize):
     def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
         self.midpoint = midpoint
@@ -41,8 +44,8 @@ def readDEM(ncFile, numLat, numLon):
     print("Reading DEM database DONE")
     return grid
 
-def topCalc(inGrid, numLat, numLon, saveFig=False,
-    toPlot=False, nBlocks=100, add_aux=False, nZen=19, nHz=16):
+def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1, 
+    saveFig=False, toPlot=False, nBlocks=100, add_aux=False, nZen=19, nHz=16):
     '''
     Topology parameter calculation and netcdf generation
 
@@ -69,28 +72,15 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
             table preparations
         nHz -- int, number of horizons
     '''
-
-    dLat = 180.0 / numLat
-    dLon = 360.0 / numLon
-
+    numLat, numLon, = inGrid.shape
     dLat = 180.0 / numLat
     dLon = 360.0 / numLon
 
     # lats and lons of the DEM pixels centers
     #  note that latitude changes from North to South
-    mLat = 90.0 - numpy.arange(nLat) * dLat + dLat / 2.
+    mLat = 90.0 - numpy.arange(numLat) * dLat + dLat / 2.
     #  note that longitude changes from West to East
-    mLon = -180.0 + numpy.arange(nLon) * dLon + dLon / 2.
-
-    # lats and lons of the computational area
-    # RP: Robert does not like magic numbers, these should be inputs
-    # but i don't know what they are
-    # (reference coordinates? what is 4?)
-    lat1 = -18 - 4
-    lat2 = -16 + 4
-
-    lon1 = -68 - 4
-    lon2 = -67 + 4
+    mLon = -180.0 + numpy.arange(numLon) * dLon + dLon / 2.
 
     # RP: what is "j"?
     jLon1 = int((lon1 + 180.0) / dLon)
@@ -122,7 +112,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
 
     # create computational area grid
     gB = topography.gridBlock(
-        x1=lon1, x2=lon2, y1=lat1, y2=lat2, delX=1, delY=1)
+        x1=lon1, x2=lon2, y1=lat1, y2=lat2, delX=delLon, delY=delLat)
     gB.createGrid()
     gB.findStartGrid(top)
 
@@ -130,25 +120,27 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
     print("y=", gB.y1, gB.y2)
     print("dLat, dLon=", top.dlat, top.dlon)
 
-    cx = gB.x1
-    cy = gB.y1
-    print((gB.gridX.gridX - top.lons[0]) / top.dlon)
-    print((top.lats[0] - gB.gridY.gridX ) / top.dlat)
-    print('gridX', gB.gridX)
-    print(gB.gridX.NX)
-    print(top.lons[gB.gridX.NX])
-    print(top.lons[gB.gridX.NX]+top.dlon)
+    if dbg: print((gB.gridX.gridX - top.lons[0]) / top.dlon)
+    if dbg: print((top.lats[0] - gB.gridY.gridX ) / top.dlat)
+    if dbg: print('gridX', gB.gridX)
+    if dbg: print(gB.gridX.NX)
+    if dbg: print(top.lons[gB.gridX.NX])
+    if dbg: print(top.lons[gB.gridX.NX]+top.dlon)
 
-    print('gridY', gB.gridY)
-    print(gB.gridY.NX)
-    print(top.lats[gB.gridY.NX])
-    print(top.lats[gB.gridY.NX]-top.dlon)
+    if dbg: print('gridY', gB.gridY)
+    if dbg: print(gB.gridY.NX)
+    if dbg: print(top.lats[gB.gridY.NX])
+    if dbg: print(top.lats[gB.gridY.NX]-top.dlon)
     if toPlot:
         plt.figure(2, figsize=(12, 5))
         plt.figure(1)
         top.show(isStatic=False)
 
     nxGridY, nxGridX = [], []
+    horAngle = topography.calcHorizontalAngle(nHz)
+
+    print ("==============================================================================")
+    print ("GRID cell")
     for ix, cx1 in enumerate(gB.gridX.gridX[:-1]):
         cx2 = gB.gridX.gridX[ix+1]
         N1, N2 = gB.gridX.NX[ix:ix + 2]
@@ -160,7 +152,9 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
 
             # RP: these variables have to be more descriptive
             ncFile = 'horizon_%05d_%05d.nc' % (N1, M1)
-            if os.path.isfile(ncFile): continue
+            if os.path.isfile(ncFile):
+                print("SKIPPED: Processing %d, %d : " % (ix, iy))
+                continue
             print('Writing {}'.format(ncFile))
 
             dx, dy = topography.haversineStep(
@@ -173,7 +167,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
                 top.lats[M1:M1+2], top.lats[M2:M2+2], M1, M2)
             print("dx,dy = ", dx, dy)
 
-            topography.preProcInit(dx, dy, top.dlon, top.dlat)
+            topography.preProcInit(dx, dy, top.dlon, top.dlat, horAngle, maxDist=20000)
 
             if toPlot:
                 plt.figure(1)
@@ -194,12 +188,12 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
 
             weight, tanA, S, horz, = topography.Preprocess(
                 dx, dy, N1, N2, M1, M2, top,
-                topography.gridCell(x1=cx1, x2=cx2, y1=cy1, y2=cy2))
+                topography.gridCell(x1=cx1, x2=cx2, y1=cy1, y2=cy2), horAngle)
 
             oxAv = numpy.zeros((nZen, nHz))
             oxAvMask = numpy.zeros((nZen, nHz))
             solzen = numpy.deg2rad(numpy.arange(nZen) * 5.)
-            for ja, sunA in enumerate(topography.horAngle):
+            for ja, sunA in enumerate(horAngle):
                 curHor = horz[:, :, ja]
 
                 for kk, sunZ in enumerate(solzen):
@@ -213,7 +207,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
 
             # sky view factor
             V = numpy.zeros_like(weight)
-            for an, angle in enumerate(topography.horAngle):
+            for an, angle in enumerate(horAngle):
                 tanTF = -numpy.arctan(1. / tanA / numpy.cos(angle - S))
                 tanTF[tanA == 0] = numpy.pi / 2.
                 tanTF[tanTF < 0] += numpy.pi
@@ -232,7 +226,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
                 tVar = fid.createVariable('azm', 'f4', ('azm',))
                 tVar.long_name = 'horizon azimuth'
                 tVar.units = 'rad'
-                tVar[:] = topography.horAngle
+                tVar[:] = horAngle
 
                 if add_aux:
                     fid.createDimension('lat', nlat)
@@ -326,7 +320,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
                 plt.figure(2)
                 plt.clf()
                 plt.subplot(131)
-                plt.pcolor(numpy.rad2deg(topography.horAngle),
+                plt.pcolor(numpy.rad2deg(horAngle),
                     numpy.rad2deg(solzen),oxAv , cmap='bwr',
                     norm=MidpointNormalize(midpoint=1.0))
                 kk=plt.colorbar()
@@ -336,7 +330,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
                 plt.title('$f_{cor}^{no mask}$', fontsize=14)
 
                 plt.subplot(132)
-                plt.pcolor(numpy.rad2deg(topography.horAngle),
+                plt.pcolor(numpy.rad2deg(horAngle),
                     numpy.rad2deg(solzen),oxAvMask)
                 kk=plt.colorbar()
                 plt.xlabel('solar azimuth', fontsize=14)
@@ -344,7 +338,7 @@ def topCalc(inGrid, numLat, numLon, saveFig=False,
                 plt.title('$f_{cor}^{masked}$', fontsize=14)
 
                 plt.subplot(133)
-                plt.pcolor(numpy.rad2deg(topography.horAngle),
+                plt.pcolor(numpy.rad2deg(horAngle),
                     numpy.rad2deg(solzen),oxAv - oxAvMask, cmap='bwr',
                     norm=MidpointNormalize(midpoint=0))
                 kk=plt.colorbar()
@@ -503,6 +497,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(\
         formatter_class=argparse.ArgumentDefaultsHelpFormatter, \
         description='')
+    parser.add_argument('--gridBox', '-grid', type=float, nargs=4, \
+        help='Grid box bounday:\n The lower left corner geographical longitude and latitude, ' + \
+             'The upper right corner geographical longitude and latitide\n' + \
+              'Longitude: -180:+180; Latitude: -90: +90', default =None)
+
     parser.add_argument('--n_lat', '-n_lat', type=int, default=10800, \
         help='Number of latitude grid points for the ETOPO1 ' + \
         'grid reshape.')
@@ -512,9 +511,9 @@ if __name__ == "__main__":
     parser.add_argument('--infile', '-i', type=str, \
         default='ETOPO1_Ice_c_gdal.grd', \
         help='ETOPO1 1 Arc-Minute Global Relief Model output netCDF')
-    parser.add_argument('--savefig', '-s', action='store_true', \
+    parser.add_argument('--savefig', '-s', action='store_true', default=False, \
         help='Save figures of V and altitude maps as PNG files.')
-    parser.add_argument('--plot', '-p', action='store_true', \
+    parser.add_argument('--plot', '-p', action='store_true', default=True, \
         help='Generate V and altitude plots in addition to ' + \
         'the output netCDF files and either save (--savefig) or ' + \
         'display them.')
@@ -525,18 +524,42 @@ if __name__ == "__main__":
     parser.add_argument('--n_blocks', '-nb', default=100, \
         help='Number of blocks in calculation into which the ' + \
         'topography grid is partitioned.')
-    parser.add_argument('--auxiliary', '-a', action='store_true', \
+    parser.add_argument('--auxiliary', '-a', action='store_true', default=False, \
         help='Add auxiliary information into netCDF.')
     args = parser.parse_args()
 
     nLat = args.n_lat
     nLon = args.n_lon
     inFile = args.infile
+    if args.gridBox is None:
+        print ("User must enter computational grid box: the lower left corner geographical longitude and latitude,\n"\
+             "the upper right corner geographical longitude and latitide.\n Example: prepareTopographyExample.py -grid -72 -22 -63 -12")
+        exit(101)
+    elif len(args.gridBox) != 4:
+        print ("User must enter all 4 values for computational grid box: \n"
+               "the lower left corner geographical longitude and latitude, "
+               "the upper right corner geographical longitude and latitide")
+        print ("Current input: ", args.gridBox)
 
     demGrid = readDEM(inFile, nLat, nLon)
-    nxx, nxy = topCalc(demGrid, nLat, nLon,
+    print( 'gridBox', 	args.gridBox)
+    print( 'saveFig', 	args.savefig)
+    print( 'toPlot', 	args.plot)
+    print( 'nBlocks', 	args.n_blocks)
+    print( 'add_aux', 	args.auxiliary)
+    print( 'nZen', 	args.n_zenith)
+    print( 'nHz', 	args.n_horizons)
+
+    nxx, nxy = topCalc(demGrid, args.gridBox[1], args.gridBox[3],
+        args.gridBox[0], args.gridBox[2],
+        delLon=1, delLat=1,  
         saveFig=args.savefig, toPlot=args.plot,
         nBlocks=args.n_blocks, add_aux=args.auxiliary,
         nZen=args.n_zenith, nHz=args.n_horizons)
+
+    # nxx, nxy = topCalc(demGrid, nLat, nLon,
+    #     saveFig=args.savefig, toPlot=args.plot,
+    #     nBlocks=args.n_blocks, add_aux=args.auxiliary,
+    #     nZen=args.n_zenith, nHz=args.n_horizons)
     prepareSW(nxx, nxy)
     prepareLW(nxx, nxy)
