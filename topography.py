@@ -24,16 +24,19 @@ def calcHorizontalAngle(nHorizon):
 
 def haversineStep(lat, dLon, dLat):
     """
+        Given latitide returns dx, and dy corresponding to
+        increment of lon and lat by dLon, dLat
+        dLon and dLat in deg
+        dx and dy in radians
     """
-
     Reff = geodesy.Reff(lat) # in [m]
     aLon = numpy.cos(numpy.deg2rad(lat))**2 * \
-        numpy.sin(numpy.deg2rad(1./2.))**2
-    dLat *= Reff*numpy.deg2rad(1.)
-    dLon *= Reff*2. * \
-        numpy.arctan2(numpy.sqrt(aLon), numpy.sqrt(1. - aLon))
-    return dLat, dLon
+        numpy.sin(numpy.deg2rad(dLon/2.))**2
 
+    dy = Reff*numpy.deg2rad(dLat)
+    dx = Reff*2. * \
+        numpy.arctan2(numpy.sqrt(aLon), numpy.sqrt(1. - aLon))
+    return dx, dy
 
 class gridCell():
     """
