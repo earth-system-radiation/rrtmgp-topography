@@ -8,7 +8,7 @@ from netCDF4 import Dataset
 
 import warnings
 warnings.filterwarnings("ignore")
-dbg=False
+dbg = False
 class MidpointNormalize(colors.Normalize):
     def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
         self.midpoint = midpoint
@@ -33,46 +33,31 @@ def readDEM(ncFile, numLat, numLon):
         numLat -- int, number of latitudes for output grid (x-axis)
         numLon -- int, number of longitudes for output grid (y-axis)
 
+        numLat and numLon must be consistent with data provided with ncFile
+
     Output
-        grid -- NumPy array, surface heights
+        dem[numLat, numLon] -- NumPy array, surface heights
     '''
 
     print("Reading DEM database")
     with Dataset(ncFile) as fid:
-        grid = numpy.reshape(fid.variables['z'][:], (numLat, numLon))
+        dem = numpy.reshape(fid.variables['z'][:], (numLat, numLon))
 
     print("Reading DEM database DONE")
-    return grid
+    return dem
 
-def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1, 
-    saveFig=False, toPlot=False, nBlocks=100, add_aux=False, nZen=19, nHz=16):
+
+def wholeDEM(dem, nBlocks=100):
     '''
-    Topology parameter calculation and netcdf generation
+    return the whole DEM extended by nBlocks in all directions
 
-    Call
-        nxGridX, nxGridY = topCalc(inGrid, numLat, numLon, saveFig=False,
-            toPlot=False, nBlocks=100, add_aux=False, nZen=19)
+    Input
+        dem   -- NumPy array, surface heights
 
-    Inputs
-        inGrid -- NumPy array, grid from readDEM()
-        numLat -- int, number of grid latitudes
-        numLon -- int, number of grid longitudes
-
-    Outputs
-        nxGridX, nxGridY -- integer sets (list with unique elements),
-            this is necessary for naming convention used and
-            referenced throughout module; nxGridY is in descending order
-
-    Keywords
-        toPlot -- boolean, plot the topology (height, V) maps
-        saveFig -- boolean, save height maps to PNG files
-        nBlocks -- int,
-        add_aux -- boolean, control information added to netCDF file
-        nZen -- int, number of zenith angle that will be used in
-            table preparations
-        nHz -- int, number of horizons
+    Output
+        topography.topographyBlock object
     '''
-    numLat, numLon, = inGrid.shape
+    numLat, numLon, = dem.shape
     dLat = 180.0 / numLat
     dLon = 360.0 / numLon
 
@@ -82,151 +67,474 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
     #  note that longitude changes from West to East
     mLon = -180.0 + numpy.arange(numLon) * dLon + dLon / 2.
 
-    # RP: what is "j"?
-    jLon1 = int((lon1 + 180.0) / dLon)
-    jLon2 = int((lon2 + 180.0) / dLon)
+    # since DEM cells boundaries goes from 90, 90 - dLat, 90 -2*dLat, ...
+    # latitude lat belong to the cell with index int((90.0 - lat) / dLat)
+    # except lat = -90 which belongs to cell with index int((90.0 - lat) / dLat) - 1
+    # and extend borders by nBlocks each sides
 
-    jLat1 = int((90.0 - lat2) / dLat)
-    jLat2 = int((90.0 - lat1) / dLat)
+    #
+    # # note that at the North and South pole vicinity we have to be creative
+    # # and copy the rows similar if -180 longitude is close
+    # #  flags that control this abnormal situation
+    # addNorth = idxNorth < 0
+    # addSouth = idxSouth >= numLat
+    #
+    # addWest = idxWest < 0
+    # addEast = idxWest >= numLon
+    #
 
-    # extra pixels to compute horizon angles
-    print("Area boundaries to be extracted from DEM")
-    print("Lat:", 90.0 - (jLat1 - 1) * dLat - dLat / 2., 90.0 -
-        (jLat2) * dLat - dLat / 2.)
-    print("Lon:", -180.0 + (jLon1) * dLon - dLon / 2., -180.0 +
-        (jLon2 + 1) * dLon - dLon / 2.)
+    # allocate memory
+    sizeLat = numLat + 2* nBlocks
+    sizeLon = numLon + 2* nBlocks
 
-    hh = inGrid[jLat1 - 1 - nBlocks:jLat2 + nBlocks,
-        jLon1 - nBlocks:jLon2 + 1 + nBlocks]
+    # row -> latitudes
+    # col -> longitudes
+
+    demSubset = numpy.zeros((sizeLat, sizeLon))
+
+    idxSouth = numLat - 1 + nBlocks
+    idxEast  = numLon - 1 + nBlocks
+
+    demSubset[nBlocks:sizeLat-nBlocks, nBlocks:sizeLon-nBlocks] = dem
+    # add to the North and South
+    for jj in range(nBlocks):
+        demSubset[jj,                nBlocks:sizeLon-nBlocks] = dem[nBlocks-jj-1, :]
+        demSubset[idxSouth + jj + 1, nBlocks:sizeLon-nBlocks] = dem[numLat -1-jj , :]
+
+    # add to the East and West
+    for jj in range(nBlocks):
+        demSubset[:, jj          ] = demSubset[:, 2*nBlocks-jj-1]
+        demSubset[:, idxEast+jj+1] = demSubset[:, idxEast-jj]
+
+    mLat =   90.0 - numpy.arange(sizeLat) * dLat - dLat / 2. + nBlocks*dLon
+    mLon = -180.0 + numpy.arange(sizeLon) * dLon + dLon / 2. - nBlocks*dLon
+
+    return topography.topographyBlock(dem=demSubset, lons=mLon, lats=mLat, dlon=dLon, dlat=dLat)
+
+
+def subsetDEM(dem, lonWest, lonEast, latSouth, latNorth, nBlocks=100):
+    '''
+    return a subset of DEM bounded by
+    lower left  (lonWest, latSouth)
+    upper right (lonEast, latNorth)
+
+    Input
+        dem[numLat, numLon] -- NumPy array, surface heights [m]
+        lonWest, lonEast -- left and right longitudes       [deg]
+        latSouth, latNorth -- lower and upper latitides     [deg]
+
+    Output
+        topography.topographyBlock object
+    '''
+    numLat, numLon, = dem.shape
+
+    # compute DEM resolution
+    dLat = 180.0 / numLat
+    dLon = 360.0 / numLon
+
+    # since DEM cells boundaries goes from noth to south 90, 90 - dLat, 90 -2*dLat, ...
+    # latitude <lat> belong to the cell with index <int((90.0 - lat) / dLat)>
+    # Special case <lat = -90> which belongs to cell with index <int((90.0 - lat) / dLat) - 1>
+    # and extend borders by nBlocks each sides
+
+    idxNorth = int((90.0 - latNorth) / dLat)
+
+    # DEM cell should be above the lower boundary so
+    # if latitude is coincide with DEM latitude grid
+    #  the index is decreased by one
+    idxSouth = int((90.0 - latSouth) / dLat)
+    if abs(90.0 - latSouth - idxSouth*dLat) < 1e-8:
+        idxSouth -= 1
+    # python excludes the last index in expression [i1:i2]
+    #  so add 1
+    idxSouth += 1
+
+    idxWest = int((lonWest + 180.0) / dLon)
+    # DEM cell should be to the left at east boundary  so
+    # if longitude  is coincide with DEM longitude grid
+    #  the index is decreased by one
+    idxEast = int((lonEast + 180.0) / dLon)
+    if abs(lonEast + 180.0 - idxEast * dLon) < 1e-8:
+        idxEast -= 1
+    # python excludes the last index in expression [i1:i2]
+    #  so add 1
+    idxEast += 1
+
+
+    # extend all boundaries by nBlocks
+    idxNorth -= nBlocks
+    idxSouth += nBlocks
+    idxWest -= nBlocks
+    idxEast += nBlocks
+
+    # note that at the North and South pole vicinity we have to be creative
+    # and copy the rows above 90 (below -90) from dem below 90 (above -90)
+    # similar if -180 longitude is close
+    # flags that control this possibility
+    addNorth=idxNorth < 0
+    addSouth=idxSouth > numLat
+
+    addWest =idxWest < 0
+    addEast =idxEast > numLon
+
+    # allocate memory
+    sizeLat = idxSouth - idxNorth
+    sizeLon = idxEast - idxWest
+
+    # we can have two type of cases
+    # normal case lonEast > lonWest
+    if lonWest > lonEast:
+        # the array is filled in two steps
+        # step 1 lonWest - -180,
+        # step 2 -180 - lonEast
+        sizeLon += numLon
+
+
+    if dbg:
+        print ("\nextended indices", sizeLat, sizeLon)
+        print('sizeLat', sizeLat)
+        print('sizeLon', sizeLon)
+
+    demSubset = numpy.zeros( (sizeLat, sizeLon) )
+
+    # mLat and mLon are for the DEM cell upper and left boundaries
+    mLat =   90.0 - idxNorth*dLat -  numpy.arange(sizeLat) * dLat #- dLat / 2.
+    mLon = -180.0 + idxWest *dLon +  numpy.arange(sizeLon) * dLon #+ dLon / 2.
+
+    if dbg:
+        print ("\nextended indices", sizeLat, sizeLon)
+        print('idxNorth', idxNorth, mLat[ 0], '<>', latNorth + nBlocks*dLat)
+        print('idxSouth', idxSouth, mLat[-1], '<>', latSouth - nBlocks*dLat)
+
+        print('idxWest', idxWest, mLon[ 0],  '<>', lonWest- nBlocks*dLon)
+        print('idxEast', idxEast, mLon[-1],  '<>', lonEast+ nBlocks*dLon)
+
+    # <idx > are the indices for dem array
+    #  however they can be unrealistic indicating that
+    # data has to be extended through DEM array boundary
+    # <indAdjusted.. >
+    idxAdjNorth = 0       if addNorth else idxNorth
+    idxAdjSouth = numLat  if addSouth else idxSouth
+
+    idxAdjWest = 0      if addWest else idxWest
+    idxAdjEast = numLon if addEast else idxEast
+
+    # <dem... > are the indices for demSubset array
+    # the index shows where dem data will be copied
+    # in trivial case where all the data inside of dem
+    # demNorth=0
+    # demSouth=sizeLat
+    # demEast =0
+    # demWest =sizeLon
+    # in the case it has to be extended to the South
+    # width = idxSouth - numLat
+    # demSouth = sizeLat - width
+
+    demNorth = idxAdjNorth - idxNorth
+    widthSouth = idxSouth - idxAdjSouth
+    demSouth = sizeLat - widthSouth   # sizeLat - numLat if addSouth else sizeLat
+
+    demWest = idxAdjWest - idxWest
+    widthEast = idxEast- idxAdjEast
+    demEast = sizeLon - widthEast
+
+    if dbg:
+        print ("\nadjustment", sizeLat, sizeLon)
+        print("where %6s %6s %6s %6s"%('add', 'idxAdj', 'idx', "dem"))
+        print('North %6r %6d %6d %6d'%(addNorth, idxAdjNorth, idxNorth, demNorth))
+        print('South %6r %6d %6d %6d %6d'%(addSouth, idxAdjSouth, idxSouth, demSouth, widthSouth))
+
+        print('West  %6r %6d %6d %6d'%(addWest, idxAdjWest, idxWest, demWest))
+        print('East  %6r %6d %6d %6d %6d'%(addEast, idxAdjEast, idxEast, demEast, widthEast))
+
+    # we can have two type of cases
+    # normal case lonEast > lonWest
+    if lonWest < lonEast:
+        # the array is filled in normal way
+        demSubset[demNorth:demSouth, demWest:demEast] = dem[idxAdjNorth:idxAdjSouth, idxAdjWest:idxAdjEast]
+
+        # copy rows if our extended area goes over the North
+        if addNorth:
+            for jj in range(demNorth):
+                demSubset[jj, demWest:demEast] = dem[demNorth - jj - 1, idxAdjWest:idxAdjEast]
+
+        # copy rows if our extended area goes over the South
+        if addSouth:
+            for jj in range(widthSouth):
+                demSubset[demSouth + jj, demWest:demEast] = dem[numLat - 1 - jj, idxAdjWest:idxAdjEast]
+
+    else:
+        # the array is filled in two steps
+        # -180 longitude index in demSubset
+        dem180 =  numLon - idxAdjWest
+
+        # step 1 lonWest - -180,
+        demSubset[demNorth:demSouth, demWest:dem180] = dem[idxAdjNorth:idxAdjSouth, idxAdjWest:]
+        # step 2 -180 - lonEast
+        demSubset[demNorth:demSouth, dem180:] = dem[idxAdjNorth:idxAdjSouth, :idxAdjEast]
+
+        # copy rows if our extended area goes over the North
+        if addNorth:
+            for jj in range(demNorth):
+                demSubset[jj, demWest:dem180] = dem[demNorth - jj - 1, idxAdjWest:]
+                demSubset[jj, dem180:] = dem[demNorth - jj - 1, :idxAdjEast]
+
+        # copy rows if our extended area goes over the South
+        if addSouth:
+            for jj in range(widthSouth):
+                demSubset[demSouth + jj, demWest:dem180] = dem[numLat - 1 - jj, idxAdjWest:]
+                demSubset[demSouth + jj, dem180:] = dem[numLat - 1 - jj, :idxAdjEast]
+
+    # copy columns if our extended area crosses -180
+    if addWest:
+        for jj in range(demWest):
+            demSubset[:, demWest-jj-1] = demSubset[:, demWest+jj]
+        # plt.plot(demSubset[10, :])
+        # plt.axvline(demWest)
+        # plt.show()
+        # exit(44)
+
+    # copy columns if our extended area crosses -180
+    if addEast:
+        for jj in range(widthEast):
+            demSubset[:, demEast+jj] = demSubset[:, demEast-jj-1]
+        # plt.plot(demSubset[10, :])
+        # plt.axvline(demEast)
+        # plt.show()
+        # exit(44)
 
     #  ATTENTION
     # the sample datase use negative heights for ocean floor
     # so set them to 0 over ocean
-    hh[hh < 0] = 0.
+    demSubset[demSubset < 0] = 0.
 
-    top = topography.topographyBlock(
-        hh=hh,
-        lons=mLon[jLon1 - 1 - nBlocks:jLon2 + nBlocks],
-        lats=mLat[jLat1 - 1 - nBlocks:jLat2 + nBlocks],
-        dlon=dLon, dlat=dLat)
+    return topography.topographyBlock(
+                dem=demSubset, lons=mLon, lats=mLat, dlon=dLon, dlat=dLat)
 
-    # create computational area grid
+
+def topCalc(dem, latSouth, latNorth, lonWest, lonEast, delLon=1, delLat=1,
+    saveFig=False, toPlot=False, nBlocks=100, add_aux=False, nZen=19, nHz=16, maxDist=20000):
+    '''
+    Topology parameter calculation and netcdf generation
+
+    Call
+        nxGridX, nxGridY = topCalc(dem, numLat, numLon, saveFig=False,
+            toPlot=False, nBlocks=100, add_aux=False, nZen=19)
+
+    Inputs
+        dem -- NumPy array, grid from readDEM()
+        latSouth, latNorth, lonWest, lonEast latitudes and longitudes defining computational area
+
+        maxDist --max distance [m] along which the horizon angle is estimated
+
+    Outputs
+        nxGridX, nxGridY -- integer sets (list with unique elements),
+            this is necessary for naming convention used and
+            referenced throughout module; nxGridY is in descending order
+
+    Keywords
+        delLon=1, delLat=1 the computational area resolution [deg]
+        toPlot -- boolean, plot the topology (height, V) maps
+        saveFig -- boolean, save height maps to PNG files
+        nBlocks -- the number of DEM cell in latitudinal and longitudinal directions the
+                -- computational area extended to read DEM database
+
+        add_aux -- boolean, control information added to netCDF file
+        nZen -- int, number of zenith angle that will be used in
+            table preparations
+        nHz -- int, number of azimuthal direction along which the horizon angles are estimated
+    '''
+
+    # check on input
+    isError = False
+
+    if abs(latSouth) > 90.0:
+        print ("invalid latSouth: must be in range [-90, 90] : %f"%(latSouth))
+        isError = True
+
+    if abs(latNorth) > 90.0:
+        print ("invalid latNorth: must be in range [-90, 90] : %f"%(latNorth))
+        isError = True
+
+    if latNorth <= latSouth:
+        print ("invalid combination of latSouth and latNorth: latSouth < latNorth : %f"%(latSouth, latNorth))
+        isError = True
+
+    if abs(lonWest) > 180.0:
+        print ("invalid lonWest: must be in range [-180, 180] : %f"%(lonWest))
+        isError = True
+
+    if abs(lonEast) > 180.0:
+        print ("invalid lonEast: must be in range [-180, 180] : %f"%(lonEast))
+        isError = True
+
+    # if lonEast <= lonWest:
+    #     print ("WARNING: -180 longitude is between lonWest and lonEast: %f"%(lonWest, lonEast))
+
+    if isError:
+        print ("ERROR: invalid input detected. please correct")
+        exit(101)
+
+    top = subsetDEM(dem, lonWest, lonEast, latSouth, latNorth, nBlocks=nBlocks)
+    dx, dy = topography.haversineStep(min(abs(latSouth), abs(latNorth)), top.dlon, top.dlat)
+    if maxDist / min(dx, dy) > nBlocks:
+        print("")
+        print("WARNING: increase nBlocks up to handle horizon angle computation at boundaries %d " % (
+            numpy.ceil(maxDist / min(dx, dy))))
+        print("")
+        plt.pause(2)
+
+    # initialize computational area grid
+    # given user defined area with resolution delLon, delLat
+    #  to handle situation lonWest > lonEast:
+    if lonWest > lonEast:
+        lonEast += 360.
+
     gB = topography.gridBlock(
-        x1=lon1, x2=lon2, y1=lat1, y2=lat2, delX=delLon, delY=delLat)
-    gB.createGrid()
-    gB.findStartGrid(top)
+        x1=lonWest, x2=lonEast, y1=latSouth, y2=latNorth, delX=delLon, delY=delLat)
+
 
     print("x=", gB.x1, gB.x2)
     print("y=", gB.y1, gB.y2)
     print("dLat, dLon=", top.dlat, top.dlon)
 
-    if dbg: print((gB.gridX.gridX - top.lons[0]) / top.dlon)
-    if dbg: print((top.lats[0] - gB.gridY.gridX ) / top.dlat)
+    if dbg: print('(gridX - top.lons[0]) / top.dlon', (gB.gridX.grid - top.lons[0]) / top.dlon)
+    if dbg: print('(top.lats[0] - gridY) / top.dlat', (top.lats[0] - gB.gridY.grid ) / top.dlat)
     if dbg: print('gridX', gB.gridX)
-    if dbg: print(gB.gridX.NX)
-    if dbg: print(top.lons[gB.gridX.NX])
-    if dbg: print(top.lons[gB.gridX.NX]+top.dlon)
-
     if dbg: print('gridY', gB.gridY)
-    if dbg: print(gB.gridY.NX)
-    if dbg: print(top.lats[gB.gridY.NX])
-    if dbg: print(top.lats[gB.gridY.NX]-top.dlon)
+
     if toPlot:
         plt.figure(2, figsize=(12, 5))
         plt.figure(1)
+        # draw topography subset extracted from DEM
         top.show(isStatic=False)
+        blk=None
+        # draw user defined area  over topography
+        plt.plot([lonWest, lonEast, lonEast, lonWest, lonWest],
+                 [latSouth, latSouth, latNorth, latNorth, latSouth], color='r')
 
     nxGridY, nxGridX = [], []
-    horAngle = topography.calcHorizontalAngle(nHz)
+
+    # return azimuth angle to compute horizon angles [rad]
+    horAzmAngle = topography.calcHorizontalAngle(nHz)
 
     print ("==============================================================================")
     print ("GRID cell")
-    for ix, cx1 in enumerate(gB.gridX.gridX[:-1]):
-        cx2 = gB.gridX.gridX[ix+1]
-        N1, N2 = gB.gridX.NX[ix:ix + 2]
-        nxGridX.append(N1)
-        for iy, cy1 in enumerate(gB.gridY.gridX[:-1]):
-            cy2 = gB.gridY.gridX[iy+1]
-            M2, M1 = gB.gridY.NX[iy:iy + 2]
-            nxGridY.append(M1)
+    for ix, cx1, cx2 in gB.gridX:
 
-            # RP: these variables have to be more descriptive
+        N1 = gB.gridX.floor(ix  , top.lons[0], top.dlon)
+        N2 = gB.gridX.ceil (ix+1, top.lons[0], top.dlon)
+        nxGridX.append(N1)
+
+        for iy, cy1, cy2 in gB.gridY:
+            # indices N2 and M2 indicates the upper boundary in the Pythonic sense
+            #  DEM latitudinal grid and computational grids are in opposite directions
+            M2 = gB.gridY.ceil (iy,     top.lats[0], top.dlat)
+            M1 = gB.gridY.floor(iy + 1, top.lats[0], top.dlat)
+
+            nxGridY.append(M1)
             ncFile = 'horizon_%05d_%05d.nc' % (N1, M1)
             if os.path.isfile(ncFile):
                 print("SKIPPED: Processing %d, %d : " % (ix, iy))
                 continue
-            print('Writing {}'.format(ncFile))
 
+            # compute the distance corresponding to DEM cell size in [deg]
             dx, dy = topography.haversineStep(
                 (cy1+cy2)/2, top.dlon, top.dlat)
+
             print(70*"-")
             print("Processing %d, %d : "%(ix, iy))
-            print("x1, x2=", cx1, cx2,
-                top.lons[N1:N1+2], top.lons[N2:N2+2], N1, N2)
-            print("y1, y2=", cy1, cy2,
-                top.lats[M1:M1+2], top.lats[M2:M2+2], M1, M2)
-            print("dx,dy = ", dx, dy)
-
-            topography.preProcInit(dx, dy, top.dlon, top.dlat, horAngle, maxDist=20000)
+            print("   x1, x2 = %.3f %.3f %.3f %.3f %d %d"%(cx1, cx2, top.lons[N1], top.lons[N2], N1, N2))
+            print("   y1, y2 = %.3f %.3f %.3f %.3f %d %d"%(cy1, cy2, top.lats[M1], top.lats[M2], M1, M2))
+            print("   dx, dy = %.1f %.1f"%(dx, dy))
 
             if toPlot:
                 plt.figure(1)
-                yy1=plt.axhline(cy1, color='k')
-                yy2=plt.axhline(cy2, color='m')
-                xx1=plt.axvline(cx1, color='k')
-                xx2=plt.axvline(cx2, color='m')
-
+                if blk:
+                    blk.remove()
+                # draw computational cell over topography
+                lines=plt.plot([cx1, cx2, cx2, cx1, cx1],
+                         [cy1, cy1, cy2, cy2, cy1], color='m')
+                blk =lines.pop(0)
                 if saveFig:
                     plt.savefig('figure_spot.%d.%d.png' % (ix, iy))
-
                 plt.draw()
                 plt.pause(.5)
-                yy1.remove()
-                yy2.remove()
-                xx1.remove()
-                xx2.remove()
 
-            weight, tanA, S, horz, = topography.Preprocess(
-                dx, dy, N1, N2, M1, M2, top,
-                topography.gridCell(x1=cx1, x2=cx2, y1=cy1, y2=cy2), horAngle)
+            # To avoid computation for the flat terrain
+            #  delta is max allowed altitude difference in [m]
+            featureFound=top.check(N1, N2, M1, M2, delta=1)
 
-            oxAv = numpy.zeros((nZen, nHz))
-            oxAvMask = numpy.zeros((nZen, nHz))
-            solzen = numpy.deg2rad(numpy.arange(nZen) * 5.)
-            for ja, sunA in enumerate(horAngle):
-                curHor = horz[:, :, ja]
+            if featureFound:
 
-                for kk, sunZ in enumerate(solzen):
-                    mask = numpy.int32(curHor > sunZ)
-                    oxAv[kk, ja] = numpy.mean(
-                        weight * (1. + tanA * numpy.tan(sunZ) *
-                        numpy.cos(sunA - S)))/numpy.mean(weight)
-                    oxAvMask[kk, ja] = numpy.mean(mask *
-                        weight * (1. + tanA * numpy.tan(sunZ) *
-                        numpy.cos(sunA - S)))/numpy.mean(weight)
+                # If computational area is not large topography.preProcInit can be called just once
+                topography.preProcInit(dx, dy, top.dlon, top.dlat, horAzmAngle, maxDist=maxDist, debug=False)
+
+                weight, tanSlopeAngle, slopeAspect, horAngle, = topography.Preprocess(
+                            dx, dy, N1, N2, M1, M2, top,
+                            topography.gridCell(x1=cx1, x2=cx2, y1=cy1, y2=cy2), horAzmAngle, debug=False)
+            else:
+                if dbg: print ('computations skipped: no terrain features found')
+
+                # default for flat surface
+                weight = numpy.ones((M2 - M1, N2 - N1))
+                horAngle = numpy.full((M2 - M1, N2 - N1, len(horAzmAngle)),fill_value=numpy.pi/2.)
+                tanSlopeAngle = numpy.zeros_like(weight)
+                slopeAspect = numpy.zeros_like(weight)
+
+            # mean slope angle without shadow mask
+            oxAv = numpy.ones((nZen, nHz))
+
+            # mean slope angle with shadow mask
+            oxAvMask = numpy.ones((nZen, nHz))
+
+            # solar zenith grid for table
+            solzen = numpy.deg2rad(numpy.linspace(0, 90, num=nZen, endpoint=True))
+            solzen[-1]=numpy.deg2rad(89.9)
 
             # sky view factor
-            V = numpy.zeros_like(weight)
-            for an, angle in enumerate(horAngle):
-                tanTF = -numpy.arctan(1. / tanA / numpy.cos(angle - S))
-                tanTF[tanA == 0] = numpy.pi / 2.
-                tanTF[tanTF < 0] += numpy.pi
-                V += numpy.sin(horz[:, :, an] +
-                    numpy.pi / 2. - tanTF) ** 2
+            V = numpy.ones_like(weight)
 
-            V /= 16.
+            # computation of mean slope angle
+            if featureFound:
+                for ja, sunA in enumerate(horAzmAngle):
+                    curHor = horAngle[:, :, ja]
 
-            print ("Writing topography netCDF")
+                    for kk, sunZ in enumerate(solzen):
+                        # shadow mask
+                        mask = numpy.int32(curHor > sunZ)
+                        if toPlot:
+                            oxAv[kk, ja] = numpy.mean(
+                                weight * (1. + tanSlopeAngle * numpy.tan(sunZ) *
+                                numpy.cos(sunA - slopeAspect)))/numpy.mean(weight)
+
+                        oxAvMask[kk, ja] = numpy.mean(mask *
+                            weight * (1. + tanSlopeAngle * numpy.tan(sunZ) *
+                            numpy.cos(sunA - slopeAspect)))/numpy.mean(weight)
+
+                # sky view factor
+                for an, angle in enumerate(horAzmAngle):
+                    tanTF = -numpy.arctan(1. / tanSlopeAngle / numpy.cos(angle - slopeAspect))
+                    tanTF[tanSlopeAngle == 0] = numpy.pi / 2.
+                    tanTF[tanTF < 0] += numpy.pi
+                    V += numpy.sin(horAngle[:, :, an] +
+                        numpy.pi / 2. - tanTF) ** 2
+
+                V /= 16.
+
+            print('   Writing {}'.format(ncFile), end='')
+
             with Dataset(ncFile, 'w', format='NETCDF4_CLASSIC') as fid:
-                nlat, nlon,nazm,  =  horz.shape
+                nlat, nlon, nazm,  =  horAngle.shape
                 # define axis size
                 fid.createDimension('azm', nazm)
+                fid.createDimension('zen', nZen)
 
                 # create azm axis
                 tVar = fid.createVariable('azm', 'f4', ('azm',))
                 tVar.long_name = 'horizon azimuth'
                 tVar.units = 'rad'
-                tVar[:] = horAngle
+                tVar[:] = horAzmAngle
 
                 if add_aux:
                     fid.createDimension('lat', nlat)
@@ -253,31 +561,30 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
                     tVar.units = 'none'
                     tVar[:] = weight
 
-                    # create tanA
+                    # create tanSlopeAngle
                     tVar = fid.createVariable(
                         'tanA', 'f4', ('lat', 'lon'))
                     tVar.standard_name = 'slope angle'
                     tVar.long_name = 'slope angle'
                     tVar.units = 'rad'
-                    tVar[:] = numpy.rad2deg(tanA)
+                    tVar[:] = numpy.rad2deg(tanSlopeAngle)
 
-                    # create S
+                    # create slopeAspect
                     tVar = fid.createVariable(
                         'S', 'f4', ('lat', 'lon'))
                     tVar.standard_name = 'slope aspect'
                     tVar.long_name = 'slope aspect'
                     tVar.units = 'rad_north'
-                    tVar[:] = numpy.rad2deg(S)
+                    tVar[:] = numpy.rad2deg(slopeAspect)
 
-                    # create horz
+                    # create horAngle
                     tVar = fid.createVariable(
                         'horz', 'f4', ('lat', 'lon', 'azm'))
                     tVar.standard_name = 'horizon angle'
                     tVar.long_name = 'horizon angle'
                     tVar.units = 'rad'
-                    tVar[:] = horz
+                    tVar[:] = horAngle
 
-                fid.createDimension('zen', nZen)
                 # create azm axis
                 tVar = fid.createVariable('zen', 'f4', ('zen',))
                 tVar.long_name = 'solar zenith'
@@ -305,7 +612,7 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
                 tVar.standard_name = 'weighted LW view factor'
                 tVar.long_name = 'weighted LW view factor'
                 tVar.units = 'none'
-                tVar[:] = numpy.mean(weight*V * numpy.sqrt(1. + tanA ** 2))/numpy.mean(weight)
+                tVar[:] = numpy.mean(weight*V * numpy.sqrt(1. + tanSlopeAngle ** 2))/numpy.mean(weight)
 
                 tVar = fid.createVariable('InvCosA', 'f4')
                 tVar.standard_name = \
@@ -313,58 +620,34 @@ def topCalc(inGrid, lat1, lat2, lon1, lon2, delLon=1, delLat=1,
                 tVar.long_name = \
                     'averaged inverse cosine of slope angle'
                 tVar.units = 'unit'
-                tVar[:] = numpy.mean(weight*numpy.sqrt(1. + tanA ** 2))/numpy.mean(weight)
+                tVar[:] = numpy.mean(weight*numpy.sqrt(1. + tanSlopeAngle ** 2))/numpy.mean(weight)
+
+            print(": DONE")
 
             if toPlot:
+                # plot SW correction factor and
+                #  LW view factor
                 plt.figure(2)
                 plt.clf()
-                plt.subplot(131)
-                plt.pcolor(numpy.rad2deg(horAngle),
-                    numpy.rad2deg(solzen),oxAv , cmap='bwr',
-                    norm=MidpointNormalize(midpoint=1.0))
-                kk=plt.colorbar()
-                plt.ylabel('solar zenith', fontsize=14)
-                plt.xlabel('solar azimuth', fontsize=14)
-                plt.tight_layout()
-                plt.title('$f_{cor}^{no mask}$', fontsize=14)
-
-                plt.subplot(132)
-                plt.pcolor(numpy.rad2deg(horAngle),
+                plt.subplot(121)
+                plt.pcolor(numpy.rad2deg(horAzmAngle),
                     numpy.rad2deg(solzen),oxAvMask)
                 kk=plt.colorbar()
                 plt.xlabel('solar azimuth', fontsize=14)
                 plt.tight_layout()
                 plt.title('$f_{cor}^{masked}$', fontsize=14)
 
-                plt.subplot(133)
-                plt.pcolor(numpy.rad2deg(horAngle),
-                    numpy.rad2deg(solzen),oxAv - oxAvMask, cmap='bwr',
-                    norm=MidpointNormalize(midpoint=0))
-                kk=plt.colorbar()
-                kk.set_label(r'$f_{cor}$')
-                plt.xlabel('solar azimuth', fontsize=14)
-                plt.tight_layout()
-                plt.title('$f_{cor}^{no mask} - f_{cor}^{masked}$',
-                    fontsize=14)
-                if saveFig:
-                    plt.savefig('./figure_f_cor.%d.%d.png'%(ix,iy))
-
-                plt.draw()
-                plt.pause(.1)
-
-                plt.figure(2)
-                plt.clf()
+                plt.subplot(122)
                 plt.pcolor(top.lons[N1:N2 + 1], top.lats[M1:M2 + 1], V)
                 kk = plt.colorbar()
                 kk.set_label('V')
                 plt.xlabel('Longitude', fontsize=14)
                 plt.ylabel('Latitude', fontsize=14)
-                plt.title('V=%.3f' % (numpy.mean(V)))
-                if saveFig: plt.savefig('./figure_V.png')
+                plt.title('V=%.3f' % (numpy.mean(weight*V)/numpy.mean(weight)))
+                if saveFig:
+                    plt.savefig('./figure_f_cor.%d.%d.png'%(ix,iy))
                 plt.draw()
                 plt.pause(.1)
-
-            print("writing to netcdf DONE")
 
     return sorted(set(nxGridX)), sorted(set(nxGridY))[::-1]
 
@@ -390,12 +673,12 @@ def prepareSW(nxGridX, nxGridY,
     '''
 
     # topography
-    fname = 'horizon_00100_00641.nc'
+    fname = 'horizon_{:05d}_{:05d}.nc'.format(nxGridX[0], nxGridY[0])
     with Dataset(fname) as fid:
         zenData = fid.variables['zen'][:]
-        horAngle = fid.variables['azm'][:]
+        horAzmAngle = fid.variables['azm'][:]
 
-    nHorizon = len(horAngle)
+    nHorizon = len(horAzmAngle)
     nZen =  len(zenData)
     oxAvMask = numpy.zeros(((nCol, nHorizon, nZen)))
     id = 0
@@ -423,7 +706,7 @@ def prepareSW(nxGridX, nxGridY,
         tVar = oid.createVariable('solAzm', 'f4', ('azm',))
         tVar.long_name = 'solar azimuth'
         tVar.units = 'deg'
-        tVar[:] = numpy.rad2deg(horAngle)
+        tVar[:] = numpy.rad2deg(horAzmAngle)
 
         tVar = oid.createVariable('solZen', 'f4', ('zen',))
         tVar.long_name = 'solar zenith'
@@ -520,41 +803,39 @@ if __name__ == "__main__":
         help='Number of zenith angles')
     parser.add_argument('--n_horizons', '-nh', default=16, type=int, \
         help='Number of horizons.')
-    parser.add_argument('--n_blocks', '-nb', default=100, \
-        help='Number of blocks in calculation into which the ' + \
-        'topography grid is partitioned.')
+    parser.add_argument('--n_blocks', '-nb', default=20, \
+        help='The DEM projection on the user defined area is extended by n_blocks of DEM cells in all directions')
     parser.add_argument('--auxiliary', '-a', action='store_true', default=False, \
         help='Add auxiliary information into netCDF.')
     args = parser.parse_args()
 
-    nLat = args.n_lat
-    nLon = args.n_lon
-    inFile = args.infile
     if args.gridBox is None:
         print ("User must enter computational grid box: the lower left corner geographical longitude and latitude,\n"\
              "the upper right corner geographical longitude and latitide.\n Example: prepareTopographyExample.py -grid -72 -22 -63 -12")
         exit(101)
+
     elif len(args.gridBox) != 4:
         print ("User must enter all 4 values for computational grid box: \n"
                "the lower left corner geographical longitude and latitude, "
                "the upper right corner geographical longitude and latitide")
         print ("Current input: ", args.gridBox)
 
-    demGrid = readDEM(inFile, nLat, nLon)
-    print( 'gridBox', 	args.gridBox)
-    print( 'saveFig', 	args.savefig)
-    print( 'toPlot', 	args.plot)
-    print( 'nBlocks', 	args.n_blocks)
-    print( 'add_aux', 	args.auxiliary)
-    print( 'nZen', 	args.n_zenith)
-    print( 'nHz', 	args.n_horizons)
+    demGrid = readDEM(args.infile, args.n_lat, args.n_lon)
+    print ("PrepareTopographyExample args:")
+    print( '    gridBox', 	args.gridBox)
+    print( '    saveFig', 	args.savefig)
+    print( '    toPlot', 	args.plot)
+    print( '    nBlocks', 	args.n_blocks)
+    print( '    add_aux', 	args.auxiliary)
+    print( '    nZen', 	args.n_zenith)
+    print( '    nHz', 	args.n_horizons)
 
     nxx, nxy = topCalc(demGrid, args.gridBox[1], args.gridBox[3],
         args.gridBox[0], args.gridBox[2],
         delLon=1, delLat=1,  
         saveFig=args.savefig, toPlot=args.plot,
         nBlocks=args.n_blocks, add_aux=args.auxiliary,
-        nZen=args.n_zenith, nHz=args.n_horizons)
+        nZen=args.n_zenith, nHz=args.n_horizons, maxDist=20000)
 
     prepareSW(nxx, nxy)
     prepareLW(nxx, nxy)

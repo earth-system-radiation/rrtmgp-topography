@@ -1,11 +1,13 @@
 import numpy
 import os
-import pickle as pkl
 import geodesy
 import matplotlib.pyplot as plt
 
+dbg = False
 # GLOBAL VARIABLES (treating this like a common block)
-TLEN = dict()
+TLENX = dict()
+TLENY = dict()
+
 IDXXX = dict()
 IDXXY = dict()
 IDXYX = dict()
@@ -17,10 +19,11 @@ def calcHorizontalAngle(nHorizon):
     """
     Given a number of horizons, calculate angle at which each horizon
     is defined
+    return azimuth angles in [rad]
     """
 
     dAngle = 360.0 / nHorizon
-    return numpy.deg2rad(numpy.arange(nHorizon)*dAngle)
+    return numpy.deg2rad(numpy.arange(nHorizon)*dAngle) # [rad]
 
 def haversineStep(lat, dLon, dLat):
     """
@@ -40,161 +43,140 @@ def haversineStep(lat, dLon, dLat):
 
 class gridCell():
     """
+    class represent functionality for a computational Grid cell
     """
-
     def __init__(self, x1=None, x2=None, y1=None, y2=None):
-        # bounding box
+        """
+        initialization: bounding box
+        """
+        # bounding box in [degree]
         self.x1 = x1
         self.x2 = x2
         self.y1 = y1
         self.y2 = y2
-        # length in km
-        self.dy = None
-        self.dx = None
-
-    def getDxDy(self, lat, dLat=1., dLon=1.):
-        self.dx, self.dy = haversineStep(lat / 2, dLon, dLat)
 
     def __str__(self):
-        print("x1, x2 = ", self.x1, self.x2)
-        print("y1, y2 = ", self.y1, self.y2)
-        print("dx, dy = ", self.dx, self.dy)
+        out  = "x1, x2 = %f, %f\n"%(self.x1, self.x2)
+        out += "y1, y2 = %f, %f\n"%(self.y1, self.y2)
+        return out
 
 # ======================================================================
 #  define block of cells
 
 class grid1D():
     """
+    class that represents 1D regular grid
     """
-
     def __init__(self, x1=None, x2=None, dX=None):
-        print ("grid1D init", x1, x2, dX)
-        self.x1 = x1
-        self.x2 = x2
-        self.dX = dX
-        self.gridX = None
-        self.NX = None
-        self.idx = None
+        if dbg: print ("grid1D init", x1, x2, dX)
+        self.x1 = x1        # grid start
+        self.x2 = x2        # grid end
+        self.dX = dX        # grid step
+        self.grid = None   # numpy array that contains all grid points
+        self.idx = None     # selected grid index
 
     def createGrid(self):
         """
-        creates uniform grid
+        creates uniform grid and points to the grid head
         """
-        self.gridX = numpy.linspace(
+        self.grid = numpy.linspace(
             self.x1, self.x2, num=int((self.x2 - self.x1) // self.dX + 1))
         self.idx = 0
 
-    def findStart(self, start, delta):
+    def floor(self, idx, start, delta):
         """
+        for a regular sequence  z[k] = start + delta[k]
+        return index that found index k0 that    z[k0] <= self.grid[idx] < z[k0+1]
         """
-        if start < self.gridX[0]:
-            self.NX = numpy.int32((self.gridX - start) / delta)
+        if start < self.grid[0]:
+            return numpy.int32(numpy.floor((self.grid[idx] - start) / delta))
         else:
-            self.NX = numpy.int32((start - self.gridX) / delta)
+            return numpy.int32(numpy.floor((start - self.grid[idx]) / delta))
+
+    def ceil(self, idx, start, delta):
+        """
+        for a regular sequence  z[k] = start + delta[k]
+        return index that found index k0 that    z[k0-1] <= self.grid[idx] < z[k0]
+        """
+        ind = self.floor(idx, start, delta) + 1
+        if abs(start + delta*ind - self.grid[idx])< 1e-3 *delta:
+            return ind
+        else:
+            return ind - 1
 
     def __iter__(self):
+        """
+        default iterator
+        """
         return self
 
     def __next__(self):
         idx = self.idx
         self.idx += 1
-        if self.idx >= len(self.gridX):
+        if self.idx >= len(self.grid):
+            self.idx = 0
             raise StopIteration
         else:
-            return idx, self.gridX[idx], self.gridX[idx+1], \
-                self.NX[idx],  self.NX[idx+1]
+            return idx, self.grid[idx], self.grid[idx+1]
 
     def __str__(self):
         """
         String that describes what is happening with object
         """
-
         out = '\n--grid1D-- \n x1, x2, dx:'
         out += ''.join( "%d "%(x) if x else ' None ' for x in \
             [self.x1, self.x2, self.dX])
-        out += '\ngridX:      '
-        out += 'None' if self.gridX is None else \
-            ''.join('%d ' % (x) for x in self.gridX)
+        out += '\ngrid:      '
+        out += 'None' if self.grid is None else \
+            ''.join('%d ' % (x) for x in self.grid)
 
-        out += '\nNX:         '
-        out += 'None' if self.NX is None else ''.join(
-            '%d ' % (x) for x in self.NX)
         return out
+
 
 class gridBlock(gridCell):
     """
+    class to represent computational 2D regular grid
     """
     def __init__(self, x1=None, x2=None, y1=None, y2=None,
         delX=None, delY=None):
 
-        print ("gridBlock init", delX, delY)
+        if dbg: print ("gridBlock init", delX, delY)
         super().__init__(x1=x1,  x2=x2, y1=y1, y2=y2)
         self.gridX = grid1D(x1, x2, delX)
         self.gridY = grid1D(y1, y2, delY)
-
-    def readPickle(self, pklFile):
-        with open(pklFile, 'rb') as fid:
-            self.gridX.x1 = pkl.load(fid)
-            self.gridX.x2 = pkl.load(fid)
-            self.gridY.x1 = pkl.load(fid)
-            self.gridY.x2 = pkl.load(fid)
-
-    def writePickle(self, pklFile):
-        with open(pklFile, 'wb') as fid:
-            pkl.dump(self.gridX.x1, fid)
-            pkl.dump(self.gridX.x2, fid)
-            pkl.dump(self.gridY.x1, fid)
-            pkl.dump(self.gridY.x2, fid)
+        self.createGrid()
 
     def createGrid(self):
-        print ('creating gridX.createGrid')
+        if dbg: print ('creating gridX')
         self.gridX.createGrid()
+        if dbg: print ('creating gridY')
         self.gridY.createGrid()
 
-    def findStartGrid(self, top):
-        self.gridX.findStart(top.lons[0], top.dlon)
-        self.gridY.findStart(top.lats[0], top.dlat)
 
 class topographyBlock():
     """
+    define DEM subset with lats and lons representing its grid
+    with resolution dlat, dlon
     """
-
-    def __init__(self, hh=None, lons=None, lats=None,
+    def __init__(self, dem=None, lons=None, lats=None,
         dlon=None,  dlat=None):
 
-        self.hh = hh
+        self.dem = dem
         self.lons = lons
         self.lats = lats
         self.dlon = dlon
         self.dlat = dlat
 
-    def readPickle(self, pklFile):
-        with open(pklFile, 'rb') as fid:
-            self.hh = pkl.load(fid)
-            self.dlat = pkl.load(fid)
-            self.dlon = pkl.load(fid)
-            self.lons = pkl.load(fid)
-            self.lats = pkl.load(fid)
-
-    def writePickle(self, pklFile):
-        with open(pklFile, 'wb') as fid:
-            pkl.dump(self.hh, fid)
-            pkl.dump(self.dlat, fid)
-            pkl.dump(self.dlon, fid)
-            pkl.dump(self.lons, fid)
-            pkl.dump(self.lats, fid)
-
-
     def show(self, gB=None, figFileName=None, isStatic=True):
         """
+        display topography block on figure
         """
+        plt.pcolor(self.lons, self.lats, self.dem / 1e3)
 
-        plt.pcolor(self.lons, self.lats, self.hh / 1e3)
+        # show a gridBlock is provided
         if gB:
-            plt.axhline(gB.y1, color='k')
-            plt.axhline(gB.y2, color='m')
-            plt.axvline(gB.x1, color='k')
-            plt.axvline(gB.x2, color='m')
+            plt.plot([gB.x1, gB.x2, gB.x2, gB.x1, gB.x1],
+                     [gB.y1, gB.y1, gB.y2, gB.y2, gB.y1], color='m')
 
         plt.xlabel('Longitude', fontsize=14)
         plt.ylabel('Latitude', fontsize=14)
@@ -205,116 +187,191 @@ class topographyBlock():
                 plt.savefig(figFileName)
             plt.show()
 
-def preProcInit(dx, dy, dLon, dLat, horAngle, maxDist=20000):
-    """
-    maxDist -- float, maximum distance in meters
-    horAngle -- azimuthal angle at which the horizon angle computed
-    nHz -- int, number of horizons
-    """
+    def check(self, N1, N2, M1, M2, delta=1.):
+        """
+        check if there is a variability in  top[M1:M2, N1:N2]
+        maxDist -- float, maximum distance used to compute horizon angles [m]
+        return True if variability detected otherwise False
+        """
+        if dbg: print('evaluation of DEM ', N1, N2, M1, M2)
+        maxAlt = numpy.max(self.dem[M1:M2, N1:N2])
+        minAlt = numpy.min(self.dem[M1:M2, N1:N2])
+        print ('   check altitude: max, min', maxAlt, minAlt)
+        return  maxAlt-minAlt  > delta
 
+
+def preProcInit(dx, dy, dLon, dLat, horAngle, maxDist=20000, debug=True):
+    """
+    maxDist -- float, maximum distance used to compute horizon angles [m]
+    horAngle -- azimuthal angle at which the horizon angle are computed [rad]
+                azimuth is computed from=n direction to the North clockwise
+
+    (dx, dy)      - computational grid resolution in (lon, lat)
+    (dLon, dLat)  - DEM grid resolution in (lon, lat)
+
+    To compute the horizon angle for a give cell into a given azimuthal direction
+    we find the intersections of view line with all vertical and horizontal lines
+    connecting DEM cell centers distant less than maxDist to the given DEM cell center
+
+    If computational area is not large this routine can be called just once.
+    """
     for an, angle in enumerate(horAngle):
-        maxY = - int(maxDist * numpy.sin(angle) / dy)
-        maxX = + int(maxDist * numpy.cos(angle) / dx)
-        ddY = numpy.sign(maxY)
+        # maxY, maxX is max number of computational cells along lon and lat
+        if debug: print('\nprocessing: ', an, numpy.rad2deg(angle))
+        maxX = + int(maxDist * numpy.sin(angle) / dx)
         ddX = numpy.sign(maxX)
-        TLEN[an] = numpy.array([])
-        if ddX != 0:
-            tx = 0.5 + numpy.arange(abs(maxX))* ddX
-            ty = 0.5 + tx * numpy.tan(angle) * dLat / dLon*ddY
-            TLEN[an] = numpy.append(
-                TLEN[an], numpy.sqrt((tx * dx) ** 2 + (ty * dy) ** 2))
-            iy = numpy.int32(numpy.floor(ty))
-            DELTY[an] = ty - iy
-            IDXXY[an] = iy
-            IDXXX[an] = numpy.int32(numpy.floor(tx))
 
+        #  minus due to reverse DEM direction along latitudes
+        maxY = - int(maxDist * numpy.cos(angle) / dy)
+        ddY = numpy.sign(maxY)
+
+        # if the view line has increment along longitudes
+        if ddX != 0:
+            tx = (1.0 + numpy.arange(abs(maxX)))* ddX
+            #  corresponding increment along latitudinal direction
+            ty = numpy.abs(tx * numpy.cos(angle) / numpy.sin(angle)) * dLat / dLon*ddY
+            # represent distance between DEM center and intersections with
+            # lines along latitudes
+            TLENX[an] = numpy.sqrt((tx * dx) ** 2 + (ty * dy) ** 2)
+
+            # index increment relative DEM cell latitude index
+            iy = numpy.int32(numpy.floor(ty))
+            IDXXY[an] = iy
+
+            # the distance along latitudinal direction to the intersection point from
+            # the nearest DEM cell (used in interpolation)
+            DELTY[an] = ty - iy
+
+            # index increment relative DEM cell longitude index
+            IDXXX[an] = numpy.int32(numpy.floor(tx))
+            if debug: print('IDXXX[an]: ', IDXXX[an])
+            if debug: print('IDXXY[an]: ', IDXXY[an])
+            if debug: print('TLENX[an]: ', TLENX[an])
+            if debug: print('DELTY[an]: ', DELTY[an])
+            if debug: print('')
+
+        # if the view line has increment along latitude
         if ddY != 0:
-            ty = 0.5 + numpy.arange(abs(maxY)) * ddY
-            tx = 0.5 + ty * numpy.cos(angle) / \
-                numpy.sin(angle) * dLon / dLat
-            TLEN[an] = numpy.append(
-                TLEN[an], numpy.sqrt((tx * dx) ** 2 + (ty * dy) ** 2))
+            ty = (1.0 + numpy.arange(abs(maxY))) * ddY
+            #  corresponding increment along longitudinal direction
+            tx = numpy.abs(ty * numpy.sin(angle) / numpy.cos(angle)) *dLon / dLat * ddX
+
+            # represent distance between DEM center and intersections with
+            # lines along longitudes
+            TLENY[an] =  numpy.sqrt((tx * dx) ** 2 + (ty * dy) ** 2)
+
             ix = numpy.int32(numpy.floor(tx))
-            DELTX[an] = tx - ix
-            IDXYY[an] = numpy.int32(numpy.floor(ty))
+            # index increment relative DEM cell longitude index
             IDXYX[an] = ix
 
-def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, horAngle, usepkl=False):
+            # the distance along longitudinal direction to the intersection point from
+            # the nearest DEM cell (used in interpolation)
+            DELTX[an] = tx - ix
+
+            # index increment relative DEM cell latitude index
+            IDXYY[an] = numpy.int32(numpy.floor(ty))
+
+            if debug: print('IDXYY[an]: ', IDXYY[an])
+            if debug: print('IDXYX[an]: ', IDXYX[an])
+            if debug: print('TLENY[an]: ', TLENY[an])
+            if debug: print('DELTX[an]: ', DELTX[an])
+            if debug: print('')
+
+
+def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, horAzmAngle, debug=True):
     """
-    horAngle -- azimuthal angle at which the horizon angle computed
+    dx, dy - resolution in [m] of DEM cell
+    N1:N2 - DEM cell indices along longitude
+    M1:M2 - DEM cell indices along latitude
+    indices N2 and M2 indicates the upper boundary in pythonic sense
+
+    horAzmAngle -- azimuthal angle at which the horizon angle computed [rad]
+    output: for all DEM cell that are in computational cell
+        weight - part of the area that DEM cell contributes to compuational cell
+        tanSlopeAngle - tan of the DEM cell slope angle (with respect to slope normal)
+        slopeAspect - DEM cell aspect angle (with respect to North direction [rad]
+        horAngle    - horizon angles for horAzmAngle directions  [rad]
+                    defined with respect to normal (flat corresponds to pi/2
     """
-    nHz = len(horAngle)
-    pklFile = 'horizon_%05d_%05d.pkl'%(N1,M1)
-    if usepkl and os.path.isfile(pklFile):
-        with open(pklFile, 'rb') as fid:
-            weight = pkl.load(fid)
-            tanA = pkl.load(fid)
-            S = pkl.load(fid)
-            horz   = pkl.load(fid)
-    else:
-        weight = numpy.zeros((M2 - M1 + 1, N2 - N1 + 1))
-        horz = numpy.zeros((M2 - M1 + 1, N2 - N1 + 1, nHz))
-        grdY = ((top.hh[M1 + 1:M2 + 2, N1:N2 + 1] - \
-                 top.hh[M1:M2 + 1, N1:N2 + 1]) + \
-                (top.hh[M1 + 1:M2 + 2, N1 + 1:N2 + 2] - \
-                 top.hh[M1:M2 + 1, N1 + 1:N2 + 2])) / 2. / dy
-        grdX = ((top.hh[M1:M2 + 1, N1 + 1:N2 + 2] - \
-                 top.hh[M1:M2 + 1, N1:N2 + 1]) + \
-                (top.hh[M1 + 1:M2 + 2, N1 + 1:N2 + 2] - \
-                 top.hh[M1 + 1:M2 + 2, N1:N2 + 1])) / 2. / dx
-        cellAlt = ((top.hh[M1:M2 + 1, N1 + 1:N2 + 2] + \
-                    top.hh[M1:M2 + 1, N1:N2 + 1]) + \
-                   (top.hh[M1 + 1:M2 + 2, N1 + 1:N2 + 2] + \
-                    top.hh[M1 + 1:M2 + 2, N1:N2 + 1])) / 4.
-        for nk, k in enumerate(range(N1, N2+1)):
-            xk=top.lons[k]
-            if xk < cell.x1:
-                wx = 1. - (cell.x1-xk)/top.dlon
-            elif top.lons[k + 1] > cell.x2:
-                wx = (cell.x2 - xk)/top.dlon
+
+    # initialization
+    weight = numpy.zeros((M2 - M1, N2 - N1))
+    horAngle = numpy.zeros((M2 - M1, N2 - N1, len(horAzmAngle)))
+
+    # gradients along latitudinal direction
+    grdY = ((top.dem[M1 + 1:M2 + 1, N1:N2] - top.dem[M1:M2, N1:N2]) + \
+            (top.dem[M1 + 1:M2 + 1, N1 + 1:N2 + 1] - top.dem[M1:M2, N1 + 1:N2 + 1])) / 2. / dy
+
+    # gradients along longitudinal direction
+    grdX = ((top.dem[M1:M2, N1 + 1:N2 + 1] - top.dem[M1:M2, N1:N2]) + \
+            (top.dem[M1 + 1:M2 + 1, N1 + 1:N2 + 1] -top.dem[M1 + 1:M2 + 1, N1:N2])) / 2. / dx
+
+    # tan of slope angle
+    #  more effective to store tan than angle
+    tanSlopeAngle = numpy.sqrt(grdY ** 2 + grdX ** 2)
+
+    # slope aspect
+    #  minus due to DEM grid directions
+    #  aspect angle defined with respect to the North direction
+    slopeAspect = numpy.arctan2(grdX, -grdY) #  in [rad]
+
+    if debug:
+        print(cell)
+        print(top.lons[N1], top.lons[N2])
+        print(top.lats[M1], top.lats[M2])
+
+    #  compute weights and horizon angles
+    for nk, k in enumerate(range(N1, N2)):
+        # west longitude
+        xW=top.lons[k]
+        # east longitude
+        xE=top.lons[k+1]
+
+        if xW < cell.x1:
+            wx = (xE - cell.x1)/top.dlon
+        elif xE > cell.x2:
+            wx = (cell.x2 - xW)/top.dlon
+        else:
+            wx = 1.0
+        weight[:, nk] = wx
+
+        for nj, j in enumerate(range(M1, M2)):
+            # North latitude
+            yN = top.lats[j]
+            # South latitude
+            yS = top.lats[j+1]
+
+            if yN > cell.y2:
+                wy = (cell.y2 - yS) / top.dlat
+            elif yS < cell.y1:
+                wy = (yN - cell.y1) / top.dlat
             else:
-                wx = 1.0
+                wy = 1.
 
-            for nj, j in enumerate(range(M1, M2+1)):
-                yj = top.lats[j]
-                if yj > cell.y2:
-                    wy = wx*(1. -  (yj - cell.y2) / top.dlat)
-                elif top.lats[j+1] < cell.y1:
-                    wy = wx*(yj -cell.y1) / top.dlat
-                else:
-                    wy = wx
-                weight[nj, nk] = wy
+            weight[nj, nk] *= wy
 
-                for an, angle in enumerate(horAngle):
-                    tH = numpy.array([])
-                    if an in DELTY:
-                        ty = DELTY[an]
-                        iy = IDXXY[an] + j
-                        ix = IDXXX[an] + k + 1
-                        tH = numpy.append(tH,
-                             (top.hh[iy+1, ix]*ty + \
-                              top.hh[iy, ix]*(1.-ty)) )
-                    if an in DELTX:
-                        tx = DELTX[an]
-                        iy = IDXYY[an] + j + 1
-                        ix = IDXYX[an]  + k
-                        tH = numpy.append(tH,
-                            (top.hh[iy, ix+1]*tx + \
-                             top.hh[iy, ix]*(1.-tx)) )
+            for an, angle in enumerate(horAzmAngle):
+                maxAngle = 0.
+                # if the view line has increment along longitudes
+                if an in IDXXX:
+                    iy = IDXXY[an] + j
+                    ix = IDXXX[an] + k
+                    msk = numpy.bitwise_and(iy >= 0, ix >= 0)
+                    tH = numpy.array((top.dem[iy[msk]+1, ix[msk]]*DELTY[an][msk] + top.dem[iy[msk], ix[msk]]*(1.-DELTY[an][msk])) - top.dem[j, k])
+                    maxAngle = max(maxAngle, numpy.arctan(numpy.max(tH/TLENX[an])))
 
-                    horz[nj,nk,an] = numpy.pi/2. - \
-                        max(0, numpy.arctan(numpy.max(
-                            (tH - cellAlt[nj, nk])/TLEN[an])))
-        tanA = numpy.sqrt(grdY ** 2 + grdX ** 2)
-        S = numpy.arctan2(- grdY, grdX)
-        if usepkl:
-            with open(pklFile,'wb') as fid:
-                pkl.dump(weight, fid)
-                pkl.dump(tanA, fid)
-                pkl.dump(S, fid)
-                pkl.dump(horz, fid)
+                # if the view line has increment along latitude
+                if an in IDXYY:
+                    iy = IDXYY[an] + j
+                    ix = IDXYX[an] + k
+                    msk = numpy.bitwise_and(iy >= 0, ix >= 0)
+                    tH = numpy.array((top.dem[iy[msk]+1, ix[msk]]*DELTX[an][msk] + top.dem[iy[msk], ix[msk]]*(1.-DELTX[an][msk])) - top.dem[j, k])
+                    maxAngle = max(maxAngle, numpy.arctan(numpy.max(tH/TLENY[an])))
 
-    return weight, tanA, S, horz
+                # in [rad]
+                horAngle[nj,nk,an] = numpy.pi/2. - maxAngle
+
+    return weight, tanSlopeAngle, slopeAspect, horAngle
 
 if __name__ == "__main__":
     print (os.path.basename(__file__), "cannot be run standalone")
