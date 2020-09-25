@@ -294,10 +294,6 @@ def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, horAzmAngle, debug=True):
                     defined with respect to normal (flat corresponds to pi/2
     """
 
-    # initialization
-    weight = numpy.zeros((M2 - M1, N2 - N1))
-    horAngle = numpy.zeros((M2 - M1, N2 - N1, len(horAzmAngle)))
-
     # gradients along latitudinal direction
     grdY = ((top.dem[M1 + 1:M2 + 1, N1:N2] - top.dem[M1:M2, N1:N2]) + \
             (top.dem[M1 + 1:M2 + 1, N1 + 1:N2 + 1] - top.dem[M1:M2, N1 + 1:N2 + 1])) / 2. / dy
@@ -320,36 +316,30 @@ def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, horAzmAngle, debug=True):
         print(top.lons[N1], top.lons[N2])
         print(top.lats[M1], top.lats[M2])
 
-    #  compute weights and horizon angles
+    #  compute weight
+    # initialization
+    weight = numpy.ones((M2 - M1, N2 - N1))
+    #  check the boundaries
+    xW = top.lons[N1]
+    if xW < cell.x1:
+        weight[:,0] *= 1. + (xW - cell.x1) / top.dlon
+
+    xE = top.lons[N2+1]
+    if xE > cell.x2:
+       weight[:,-1] *= 1. + (cell.x2 - xE) / top.dlon
+
+    yN = top.lats[M1]
+    if yN > cell.y2:
+        weight[0,:] *= 1. + (cell.y2 - yN) / top.dlat
+
+    yS = top.lats[M2 + 1]
+    if yS < cell.y1:
+        weight[-1,:] *= 1. + (yS - cell.y1) / top.dlat
+
+    #  compute horizon angles
+    horAngle = numpy.zeros((M2 - M1, N2 - N1, len(horAzmAngle)))
     for nk, k in enumerate(range(N1, N2)):
-        # west longitude
-        xW=top.lons[k]
-        # east longitude
-        xE=top.lons[k+1]
-
-        if xW < cell.x1:
-            wx = (xE - cell.x1)/top.dlon
-        elif xE > cell.x2:
-            wx = (cell.x2 - xW)/top.dlon
-        else:
-            wx = 1.0
-        weight[:, nk] = wx
-
         for nj, j in enumerate(range(M1, M2)):
-            # North latitude
-            yN = top.lats[j]
-            # South latitude
-            yS = top.lats[j+1]
-
-            if yN > cell.y2:
-                wy = (cell.y2 - yS) / top.dlat
-            elif yS < cell.y1:
-                wy = (yN - cell.y1) / top.dlat
-            else:
-                wy = 1.
-
-            weight[nj, nk] *= wy
-
             for an, angle in enumerate(horAzmAngle):
                 maxAngle = 0.
                 # if the view line has increment along longitudes
