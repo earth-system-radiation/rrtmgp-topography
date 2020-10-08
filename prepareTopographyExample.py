@@ -92,19 +92,14 @@ def wholeDEM(dem, nBlocks=100):
 
     demSubset = numpy.zeros((sizeLat, sizeLon))
 
-    idxSouth = numLat - 1 + nBlocks
-    idxEast  = numLon - 1 + nBlocks
-
     demSubset[nBlocks:sizeLat-nBlocks, nBlocks:sizeLon-nBlocks] = dem
     # add to the North and South
-    for jj in range(nBlocks):
-        demSubset[jj,                nBlocks:sizeLon-nBlocks] = dem[nBlocks-jj-1, :]
-        demSubset[idxSouth + jj + 1, nBlocks:sizeLon-nBlocks] = dem[numLat -1-jj , :]
+    demSubset[:nBlocks,          nBlocks:numLon + nBlocks] = numpy.roll(dem[nBlocks - 1::-1, :], int(numLon / 2), axis=1)
+    demSubset[numLat + nBlocks:, nBlocks:numLon + nBlocks] = numpy.roll(dem[:numLat - 1 - nBlocks:-1, :], int(numLon / 2), axis=1)
 
     # add to the East and West
-    for jj in range(nBlocks):
-        demSubset[:, jj          ] = demSubset[:, 2*nBlocks-jj-1]
-        demSubset[:, idxEast+jj+1] = demSubset[:, idxEast-jj]
+    demSubset[:, :nBlocks] = demSubset[:, numLon:numLon + nBlocks]
+    demSubset[:, numLon + nBlocks:] = demSubset[:, nBlocks:2 * nBlocks]
 
     mLat =   90.0 - numpy.arange(sizeLat) * dLat - dLat / 2. + nBlocks*dLon
     mLon = -180.0 + numpy.arange(sizeLon) * dLon + dLon / 2. - nBlocks*dLon
@@ -132,6 +127,7 @@ def subsetDEM(dem, lonWest, lonEast, latSouth, latNorth, nBlocks=100):
     dLat = 180.0 / numLat
     dLon = 360.0 / numLon
 
+    numLon2 = int(numLon/2)
     # since DEM cells boundaries goes from noth to south 90, 90 - dLat, 90 -2*dLat, ...
     # latitude <lat> belong to the cell with index <int((90.0 - lat) / dLat)>
     # Special case <lat = -90> which belongs to cell with index <int((90.0 - lat) / dLat) - 1>
@@ -224,8 +220,8 @@ def subsetDEM(dem, lonWest, lonEast, latSouth, latNorth, nBlocks=100):
     # in trivial case where all the data inside of dem
     # demNorth=0
     # demSouth=sizeLat
-    # demEast =0
-    # demWest =sizeLon
+    # demEast =sizeLon
+    # demWest =0
     # in the case it has to be extended to the South
     # width = idxSouth - numLat
     # demSouth = sizeLat - width
@@ -249,59 +245,101 @@ def subsetDEM(dem, lonWest, lonEast, latSouth, latNorth, nBlocks=100):
 
     # we can have two type of cases
     # normal case lonEast > lonWest
-    if lonWest < lonEast:
-        # the array is filled in normal way
-        demSubset[demNorth:demSouth, demWest:demEast] = dem[idxAdjNorth:idxAdjSouth, idxAdjWest:idxAdjEast]
-
+    idx = numpy.arange(idxAdjWest, idxAdjEast)
+    idxMir = numpy.where(idx < numLon2, idx + numLon2, idx - numLon2)
+    if addNorth:
         # copy rows if our extended area goes over the North
-        if addNorth:
-            for jj in range(demNorth):
-                demSubset[jj, demWest:demEast] = dem[demNorth - jj - 1, idxAdjWest:idxAdjEast]
+        # has to be mirrored  lon -> lon + 180
+        demSubset[:demNorth, demWest:demEast] = dem[demNorth - 1::-1, idxMir]
+        # demSubset[0, idx] = dem[demNorth-1, idxMir]
+        # demSubset[1, idx] = dem[demNorth-2, idxMir]
+        # ...
+        # demSubset[demNorth-1, idx] = dem[0, idxMir]
 
+    if addSouth:
         # copy rows if our extended area goes over the South
+        # has to be mirrored  lon -> lon + 180
+        demSubset[demSouth:, demWest:demEast] = dem[:-widthSouth-1:-1, idxMir]
+        # demSubset[demSouth, idx] = dem[numLat-1, idxMir]
+        # demSubset[demSouth+1, idx] = dem[numLat-2, idxMir]
+        # ...
+        # demSubset[sizeLat-1, idx] = dem[numLat-widthSouth, idxMir]
+
+    if addWest:
+        # copy columns if our extended area crosses -180
+        # mirror west of -180 is the eastern part of dem
+        # lon - > 360 - lon
+        demSubset[demNorth:demSouth, :demWest] = dem[idxAdjNorth:idxAdjSouth, :numLon - 1 - demWest:-1]
+
+        if addNorth:
+            # copy rows if our extended area goes over the North
+            # has to be mirrored  lon -> lon - 180
+            # finally lon -> 180 - lon
+            #  demWest < 1 degree
+            demSubset[:demNorth, :demWest] = dem[demNorth - 1::-1, numLon2 - 1:numLon2 - 1 - demWest:-1]
+            #  in lat index
+            # demSubset[0, demWest-1] = dem[demNorth-1, numLon2]
+            # demSubset[0, demWest-2] = dem[demNorth-1, numLon2-1]
+            #  ...
+            # demSubset[0, 0       ] = dem[demNorth-1, numLon2-demWest]
+            # etc
+            # demSubset[1, ...] = dem[demNorth-2, ...]
+            # ...
+            # demSubset[demNorth-1, ...] = dem[0, ...]
+
         if addSouth:
-            for jj in range(widthSouth):
-                demSubset[demSouth + jj, demWest:demEast] = dem[numLat - 1 - jj, idxAdjWest:idxAdjEast]
+            # copy rows if our extended area goes over the South
+            demSubset[demSouth:, :demWest] = dem[:-widthSouth-1:-1, numLon2 - 1:numLon2 - 1 - demWest:-1]
+
+        # copy columns if our extended area crosses -180
+    if addEast:
+        demSubset[demNorth:demSouth, demEast:] = dem[idxAdjNorth:idxAdjSouth, :widthEast]
+        if addNorth:
+            # copy rows if our extended area goes over the North
+            # has to be mirrored  lon -> lon - 180
+            # finally lon -> 180 - lon
+            #  demWest < 1 degree
+            demSubset[:demNorth, demEast:] = dem[demNorth - 1::-1, numLon2:numLon2+widthEast]
+            #  in lat index
+            # demSubset[0, demWest-1] = dem[demNorth-1, numLon2]
+            # demSubset[0, demWest-2] = dem[demNorth-1, numLon2-1]
+            #  ...
+            # demSubset[0, 0       ] = dem[demNorth-1, numLon2-demWest]
+            # etc
+            # demSubset[1, ...] = dem[demNorth-2, ...]
+            # ...
+            # demSubset[demNorth-1, ...] = dem[0, ...]
+
+        if addSouth:
+            # copy rows if our extended area goes over the South
+            demSubset[demSouth:, demEast:] = dem[:-widthSouth-1:-1, numLon2:numLon2+widthEast]
 
     else:
         # the array is filled in two steps
         # -180 longitude index in demSubset
-        dem180 =  numLon - idxAdjWest
+        dem180 = numLon - idxAdjWest
 
-        # step 1 lonWest - -180,
+        # step 1 west of 180
         demSubset[demNorth:demSouth, demWest:dem180] = dem[idxAdjNorth:idxAdjSouth, idxAdjWest:]
-        # step 2 -180 - lonEast
-        demSubset[demNorth:demSouth, dem180:] = dem[idxAdjNorth:idxAdjSouth, :idxAdjEast]
-
-        # copy rows if our extended area goes over the North
+        idx = numpy.arange(idxAdjWest, numLon)
+        idxMir = numpy.where(idx < numLon2, idx + numLon2, idx - numLon2)
         if addNorth:
-            for jj in range(demNorth):
-                demSubset[jj, demWest:dem180] = dem[demNorth - jj - 1, idxAdjWest:]
-                demSubset[jj, dem180:] = dem[demNorth - jj - 1, :idxAdjEast]
+            # copy rows if our extended area goes over the North
+            demSubset[:addNorth, demWest:dem180] = dem[demNorth - 1::-1, idxMir]
+        if addSouth:
+            demSubset[demSouth:, demWest:dem180] = dem[:-widthSouth - 1:-1, idxMir]
+
+        # step 2 east of 180
+        demSubset[demNorth:demSouth, dem180:] = dem[idxAdjNorth:idxAdjSouth, :idxAdjEast]
+        idx = numpy.arange(idxAdjEast)
+        idxMir = numpy.where(idx < numLon2, idx + numLon2, idx - numLon2)
+        if addNorth:
+            # copy rows if our extended area goes over the North
+            demSubset[:addNorth, dem180:] = dem[demNorth - 1::-1, idxMir]
 
         # copy rows if our extended area goes over the South
         if addSouth:
-            for jj in range(widthSouth):
-                demSubset[demSouth + jj, demWest:dem180] = dem[numLat - 1 - jj, idxAdjWest:]
-                demSubset[demSouth + jj, dem180:] = dem[numLat - 1 - jj, :idxAdjEast]
-
-    # copy columns if our extended area crosses -180
-    if addWest:
-        for jj in range(demWest):
-            demSubset[:, demWest-jj-1] = demSubset[:, demWest+jj]
-        # plt.plot(demSubset[10, :])
-        # plt.axvline(demWest)
-        # plt.show()
-        # exit(44)
-
-    # copy columns if our extended area crosses -180
-    if addEast:
-        for jj in range(widthEast):
-            demSubset[:, demEast+jj] = demSubset[:, demEast-jj-1]
-        # plt.plot(demSubset[10, :])
-        # plt.axvline(demEast)
-        # plt.show()
-        # exit(44)
+            demSubset[demSouth:, dem180:] = dem[:-widthSouth - 1:-1, idxMir]
 
     #  ATTENTION
     # the sample datase use negative heights for ocean floor

@@ -355,7 +355,7 @@ def Preprocess(dx, dy, N1, N2, M1, M2, top, cell, horAzmAngle, debug=True):
                     iy = IDXYY[an] + j
                     ix = IDXYX[an] + k
                     msk = numpy.bitwise_and(iy >= 0, ix >= 0)
-                    tH = numpy.array((top.dem[iy[msk]+1, ix[msk]]*DELTX[an][msk] + top.dem[iy[msk], ix[msk]]*(1.-DELTX[an][msk])) - top.dem[j, k])
+                    tH = numpy.array((top.dem[iy[msk], ix[msk]+1]*DELTX[an][msk] + top.dem[iy[msk], ix[msk]]*(1.-DELTX[an][msk])) - top.dem[j, k])
                     maxAngle = max(maxAngle, numpy.arctan(numpy.max(tH/TLENY[an])))
 
                 # in [rad]
